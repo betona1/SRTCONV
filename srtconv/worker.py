@@ -75,10 +75,24 @@ class Worker(QThread):
             self.file_started.emit(row)
             self.log.emit(f'▶ {path}')
             try:
-                result = process_file(
-                    path, self.options, model, chain,
-                    progress=lambda stage, f, r=row: self.file_progress.emit(r, stage, f),
-                    should_cancel=self._should_cancel, log=self.log.emit)
+                try:
+                    result = process_file(
+                        path, self.options, model, chain,
+                        progress=lambda stage, f, r=row: self.file_progress.emit(r, stage, f),
+                        should_cancel=self._should_cancel, log=self.log.emit)
+                except Exception as error:
+                    if self.options.device == 'cpu' or not transcriber.is_cuda_error(error):
+                        raise
+                    # GPU 런타임(cuBLAS/cuDNN) 문제 -> CPU 로 다시 불러와 한 번 더 시도
+                    self.log.emit(f'GPU 실행 실패 ({error}). CPU 로 전환해 다시 시도합니다.')
+                    self.options.device = 'cpu'
+                    model = self.cache.get_model(self.options.model, 'cpu', self.options.allow_download, self.log.emit)
+                    if chain is not None:
+                        chain = self.cache.get_chain(self.options.engine, 'cpu', self.options.nllb_dir, self.log.emit)
+                    result = process_file(
+                        path, self.options, model, chain,
+                        progress=lambda stage, f, r=row: self.file_progress.emit(r, stage, f),
+                        should_cancel=self._should_cancel, log=self.log.emit)
                 self.file_done.emit(row, result)
                 success += 1
             except transcriber.Cancelled:

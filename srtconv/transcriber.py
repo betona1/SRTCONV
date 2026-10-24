@@ -34,12 +34,35 @@ def is_model_cached(name):
     return any((snap / 'model.bin').exists() for snap in folder.iterdir())
 
 
+CUDA_RUNTIME_DLLS = ('cublas64_12.dll', 'cudnn64_9.dll')
+CUDA_ERROR_HINTS = ('cublas', 'cudnn', 'cuda', 'cudart')
+
+
+def cuda_runtime_present():
+    """GPU 드라이버가 있어도 cuBLAS/cuDNN DLL(GPU 팩)이 없으면 실행 중 실패하므로 미리 확인합니다."""
+    if os.name != 'nt':
+        return True
+    import ctypes
+    for name in CUDA_RUNTIME_DLLS:
+        try:
+            ctypes.WinDLL(name)
+        except OSError:
+            return False
+    return True
+
+
 def cuda_available():
     try:
         import ctranslate2
-        return ctranslate2.get_cuda_device_count() > 0
+        return ctranslate2.get_cuda_device_count() > 0 and cuda_runtime_present()
     except Exception:
         return False
+
+
+def is_cuda_error(error):
+    """실행 중 발생한 예외가 CUDA 런타임 문제인지 판별합니다 (CPU 재시도 판단용)."""
+    text = str(error).lower()
+    return any(hint in text for hint in CUDA_ERROR_HINTS)
 
 
 def resolve_device(choice='auto'):

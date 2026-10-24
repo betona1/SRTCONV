@@ -49,7 +49,16 @@ def run_cli(args):
         print(f'\n[{index}/{len(args.files)}] {path}', flush=True)
         last[0] = -1
         try:
-            result = process_file(path, options, model, chain, progress=progress, log=log)
+            try:
+                result = process_file(path, options, model, chain, progress=progress, log=log)
+            except Exception as error:
+                if options.device == 'cpu' or not transcriber.is_cuda_error(error):
+                    raise
+                print(f'GPU 실행 실패 ({error}). CPU 로 전환해 다시 시도합니다.', flush=True)
+                options.device = 'cpu'
+                model, device = transcriber.load_model(options.model, 'cpu', options.allow_download, log)
+                chain = translator.build_chain(options.engine, 'cpu', None, log) if options.translate else None
+                result = process_file(path, options, model, chain, progress=progress, log=log)
             print(f'완료: {result.original}', flush=True)
             for target, out in result.translated.items():
                 print(f'  번역({languages.display_name(target)}): {out}', flush=True)
@@ -87,7 +96,8 @@ def main():
     parser.add_argument('--model', default='large-v3')
     parser.add_argument('--device', default='auto', choices=['auto', 'cuda', 'cpu'])
     parser.add_argument('--translate', default='', help='번역 대상 언어 코드, 쉼표 구분 (예: ko,ja,zh)')
-    parser.add_argument('--engine', default='auto', choices=['auto', 'nllb', 'google', 'mymemory'])
+    parser.add_argument('--engine', default='auto', choices=['auto', 'offline', 'nllb', 'google', 'mymemory'],
+                        help='번역 엔진 (offline: M2M100/NLLB 로컬 모델, nllb 는 offline 의 옛 이름)')
     parser.add_argument('--output', default='', help='출력 폴더 (기본: 원본 옆)')
     parser.add_argument('--download', action='store_true', help='모델이 없으면 다운로드 허용')
     parser.add_argument('--max-chars', type=int, default=45)

@@ -81,7 +81,8 @@ class CT2Translator:
         self.name = 'M2M100 (오프라인)' if self.kind == 'm2m100' else 'NLLB (오프라인)'
         # 한글 등 비ASCII 경로에서 sentencepiece 의 파일 열기가 실패하므로 바이트로 읽어 넘깁니다.
         self.sp = spm.SentencePieceProcessor(model_proto=(Path(model_dir) / 'sentencepiece.bpe.model').read_bytes())
-        use_cuda = device != 'cpu' and ctranslate2.get_cuda_device_count() > 0
+        from .transcriber import cuda_available
+        use_cuda = device != 'cpu' and cuda_available()
         dev = 'cuda' if use_cuda else 'cpu'
         compute = 'int8_float16' if use_cuda else 'int8'
         try:

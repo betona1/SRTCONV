@@ -205,6 +205,21 @@ class FakeModel:
         return iter(segs), _Info()
 
 
+class CudaFallbackTests(unittest.TestCase):
+    def test_is_cuda_error(self):
+        from srtconv import transcriber
+        self.assertTrue(transcriber.is_cuda_error(RuntimeError('Library cublas64_12.dll is not found or cannot be loaded')))
+        self.assertTrue(transcriber.is_cuda_error(RuntimeError('CUDA failed with error out of memory')))
+        self.assertFalse(transcriber.is_cuda_error(FileNotFoundError('no such video')))
+
+    def test_cuda_available_requires_runtime(self):
+        from srtconv import transcriber
+        from unittest import mock
+        with mock.patch.object(transcriber, 'cuda_runtime_present', return_value=False):
+            self.assertFalse(transcriber.cuda_available())
+            self.assertEqual(transcriber.resolve_device('auto'), ('cpu', 'int8'))
+
+
 class PipelineTests(unittest.TestCase):
     def test_is_media(self):
         self.assertTrue(is_media('a.MP4'))
