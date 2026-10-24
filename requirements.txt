@@ -1,0 +1,8 @@
+PySide6>=6.8
+faster-whisper>=1.2
+ctranslate2>=4.5
+sentencepiece>=0.2
+deep-translator>=1.11
+huggingface_hub>=0.30
+pyinstaller>=6.10
+Pillow>=10

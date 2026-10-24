@@ -1,0 +1,9 @@
+build/
+dist/
+release/
+__pycache__/
+*.pyc
+models/
+*.srt.part
+*.log
+.claude/
