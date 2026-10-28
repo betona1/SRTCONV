@@ -1,11 +1,14 @@
 """파일 하나를 끝까지 처리: 전사 -> 원문 SRT -> (선택) 번역 SRT."""
+import ctypes
+import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import languages
 from . import transcriber
 from . import translator
-from .srt_utils import Cue, write_srt, reserve_output
+from .srt_utils import Cue, write_srt, reserve_output, unique_path
 
 MEDIA_EXTENSIONS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.mpg', '.mpeg', '.wmv', '.flv',
                     '.wav', '.mp3', '.m4a', '.flac', '.aac', '.ogg', '.opus', '.wma'}
@@ -13,6 +16,58 @@ MEDIA_EXTENSIONS = {'.mp4', '.mkv', '.mov', '.avi', '.webm', '.m4v', '.ts', '.mp
 
 def is_media(path):
     return Path(path).suffix.lower() in MEDIA_EXTENSIONS
+
+
+# 저장 위치 선택지 (GUI 설정값 -> 표시 이름)
+OUTPUT_MODES = {
+    'source': '원본 파일과 같은 폴더',
+    'downloads': '다운로드 폴더',
+    'custom': '직접 지정한 폴더',
+    'ask': '시작할 때마다 폴더 선택',
+}
+
+
+def downloads_dir():
+    """사용자 다운로드 폴더. Windows 는 알려진 폴더 API 로 실제 위치를 묻고, 그 외는 ~/Downloads."""
+    if sys.platform == 'win32':
+        try:
+            from ctypes import wintypes
+            class GUID(ctypes.Structure):
+                _fields_ = [('Data1', wintypes.DWORD), ('Data2', wintypes.WORD), ('Data3', wintypes.WORD),
+                            ('Data4', ctypes.c_ubyte * 8)]
+            folder_id = GUID(0x374DE290, 0x123F, 0x4565, (ctypes.c_ubyte * 8)(0x91, 0x64, 0x39, 0xC4, 0x92, 0x5E, 0x46, 0x7B))
+            out = ctypes.c_wchar_p()
+            if ctypes.windll.shell32.SHGetKnownFolderPath(ctypes.byref(folder_id), 0, None, ctypes.byref(out)) == 0:
+                path = Path(out.value)
+                ctypes.windll.ole32.CoTaskMemFree(out)
+                return path
+        except Exception:
+            pass
+    return Path.home() / 'Downloads'
+
+
+def resolve_output_dir(mode, custom=''):
+    """저장 위치 모드를 실제 폴더 문자열로 바꿉니다. '' 이면 원본 파일 옆. 'ask' 는 GUI 가 직접 묻습니다."""
+    if mode == 'downloads':
+        return str(downloads_dir())
+    if mode == 'custom':
+        return (custom or '').strip()
+    return ''
+
+
+def export_files(files, directory):
+    """결과 SRT 들을 다른 폴더로 복사합니다 (덮어쓰지 않음). [(원본, 복사본), ...]"""
+    copied = []
+    for src in files:
+        src = Path(src)
+        if not src.is_file():
+            continue
+        if Path(directory).resolve() == src.parent.resolve():
+            continue   # 이미 그 폴더에 있는 파일
+        dst = unique_path(directory, src.name)
+        shutil.copy2(src, dst)
+        copied.append((src, dst))
+    return copied
 
 
 @dataclass

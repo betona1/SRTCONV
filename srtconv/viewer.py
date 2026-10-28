@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import languages
-from .srt_utils import Cue, read_srt, write_srt, timestamp
+from .srt_utils import Cue, read_srt, write_srt, timestamp, unique_path
 
 FIXED_COLUMNS = 2   # 번호, 시간
 
@@ -45,6 +45,9 @@ class SrtViewerDialog(QDialog):
         self.btn_save.setObjectName('primary')
         self.btn_save.setEnabled(False)
         self.btn_save.clicked.connect(self.save)
+        self.btn_save_as = QPushButton('다른 이름으로 저장…')
+        self.btn_save_as.setToolTip('지금 보이는 자막(수정 내용 포함)을 원하는 위치에 새 파일로 저장합니다.')
+        self.btn_save_as.clicked.connect(self.save_as)
         self.chk_wrap = QCheckBox('줄바꿈')
         self.chk_wrap.setChecked(True)
         self.chk_wrap.toggled.connect(self._toggle_wrap)
@@ -52,6 +55,7 @@ class SrtViewerDialog(QDialog):
         top.addWidget(self.chk_wrap)
         top.addWidget(self.btn_open)
         top.addWidget(self.btn_save)
+        top.addWidget(self.btn_save_as)
         layout.addLayout(top)
 
         self.table = QTableWidget(0, FIXED_COLUMNS)
@@ -187,6 +191,42 @@ class SrtViewerDialog(QDialog):
         self._update_info()
         if saved:
             self.info.setText('저장 완료: ' + ', '.join(saved))
+
+    def save_copies(self, directory):
+        """모든 열을 directory 에 새 파일로 저장합니다 (덮어쓰지 않음). 저장한 경로 목록을 돌려줍니다."""
+        saved = []
+        for col, path in enumerate(self.files):
+            target = unique_path(directory, path.name)
+            write_srt(target, [c for c in self.cues[col] if c.text])
+            saved.append(target)
+        return saved
+
+    def save_as(self):
+        if not self.files:
+            return
+        from .pipeline import downloads_dir
+        start = str(downloads_dir())
+        if len(self.files) == 1:
+            name, _ = QFileDialog.getSaveFileName(self, '다른 이름으로 저장', str(Path(start) / self.files[0].name),
+                                                  'SRT 자막 (*.srt)')
+            if not name:
+                return
+            try:
+                write_srt(name, [c for c in self.cues[0] if c.text])
+            except Exception as error:
+                QMessageBox.warning(self, 'SRT 보기', f'저장 실패: {name}\n{error}')
+                return
+            saved = [Path(name)]
+        else:
+            folder = QFileDialog.getExistingDirectory(self, f'자막 {len(self.files)}개를 저장할 폴더 선택', start)
+            if not folder:
+                return
+            try:
+                saved = self.save_copies(folder)
+            except Exception as error:
+                QMessageBox.warning(self, 'SRT 보기', f'저장 실패: {error}')
+                return
+        self.info.setText(f'저장 완료 ({saved[0].parent}): ' + ', '.join(p.name for p in saved))
 
     def closeEvent(self, event):
         if self.modified:

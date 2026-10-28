@@ -93,14 +93,20 @@ def read_srt(path):
     return cues
 
 
-def reserve_output(source, suffix, directory=None):
-    """원본 옆(또는 지정 폴더)에 덮어쓰지 않는 새 파일 경로를 확보합니다."""
-    source = Path(source)
-    directory = Path(directory) if directory else source.parent
+def unique_path(directory, name):
+    """directory 안에서 name 과 겹치지 않는 경로를 돌려줍니다 (겹치면 _2, _3 … 을 붙임)."""
+    directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
+    stem, suffix = Path(name).stem, Path(name).suffix
     for number in range(1, 10000):
         tail = '' if number == 1 else f'_{number}'
-        target = directory / f'{source.stem}_{suffix}{tail}.srt'
+        target = directory / f'{stem}{tail}{suffix}'
         if not target.exists():
             return target
     raise RuntimeError('저장할 파일 이름을 확보하지 못했습니다.')
+
+
+def reserve_output(source, suffix, directory=None):
+    """원본 옆(또는 지정 폴더)에 덮어쓰지 않는 새 파일 경로를 확보합니다."""
+    source = Path(source)
+    return unique_path(directory or source.parent, f'{source.stem}_{suffix}.srt')

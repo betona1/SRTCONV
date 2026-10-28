@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import APP_NAME, APP_VERSION, ORG_NAME, languages, transcriber, translator
-from .pipeline import Options, is_media, MEDIA_EXTENSIONS
+from .pipeline import Options, is_media, MEDIA_EXTENSIONS, OUTPUT_MODES, downloads_dir, resolve_output_dir, export_files
 from .worker import Worker, ModelCache
 from .viewer import SrtViewerDialog
 
@@ -176,8 +176,12 @@ class MainWindow(QMainWindow):
         self.btn_view_file = QPushButton('SRT 열기…')
         self.btn_view_file.setToolTip('아무 SRT 파일이나 골라서 봅니다.')
         self.btn_view_file.clicked.connect(self.view_srt_file)
-        buttons.addWidget(self.btn_view)
-        buttons.addWidget(self.btn_view_file)
+        self.btn_open_folder = QPushButton('결과 폴더 열기')
+        self.btn_open_folder.setToolTip('선택한 파일의 자막이 저장된 폴더를 탐색기로 엽니다.')
+        self.btn_open_folder.clicked.connect(self.open_result_folder)
+        self.btn_save_to = QPushButton('다른 폴더에 저장…')
+        self.btn_save_to.setToolTip('완성된 자막 파일을 원하는 폴더(예: 다운로드)에 복사해 저장합니다.')
+        self.btn_save_to.clicked.connect(self.save_results_to)
         left_layout.addLayout(buttons)
 
         self.table = QTableWidget(0, 5)
@@ -195,6 +199,14 @@ class MainWindow(QMainWindow):
         self.table.setAlternatingRowColors(True)
         self.table.doubleClicked.connect(self._open_row_folder)
         left_layout.addWidget(self.table, 1)
+        results = QHBoxLayout()
+        result_label = QLabel('결과 자막')
+        result_label.setObjectName('subtitle')
+        results.addWidget(result_label)
+        for b in (self.btn_view, self.btn_view_file, self.btn_open_folder, self.btn_save_to):
+            results.addWidget(b)
+        results.addStretch(1)
+        left_layout.addLayout(results)
         body.addWidget(left, 1)
 
         # 오른쪽: 설정 (높이가 모자라면 스크롤)
@@ -272,28 +284,38 @@ class MainWindow(QMainWindow):
         f2.addWidget(QLabel('번역 엔진'), 3, 0)
         f2.addWidget(self.cmb_engine, 3, 1)
         f2.addWidget(self.nllb_label, 4, 0, 1, 2)
-        right_layout.addWidget(g2)
 
-        g3 = QGroupBox('출력')
+        g3 = QGroupBox('저장 위치')
         f3 = QGridLayout(g3)
         f3.setVerticalSpacing(8)
         f3.setColumnStretch(1, 1)
+        self.cmb_output_mode = QComboBox()
+        for key, name in OUTPUT_MODES.items():
+            self.cmb_output_mode.addItem(name, key)
+        self.cmb_output_mode.currentIndexChanged.connect(self._update_output_mode)
         self.edt_output = QLineEdit()
-        self.edt_output.setPlaceholderText('비워두면 원본 파일 옆에 저장')
+        self.edt_output.setPlaceholderText('폴더를 지정하세요')
+        self.edt_output.textChanged.connect(self._update_output_mode)
         self.btn_output = QToolButton()
         self.btn_output.setText('…')
         self.btn_output.clicked.connect(self.choose_output)
+        self.lbl_output_path = QLabel('')
+        self.lbl_output_path.setObjectName('subtitle')
+        self.lbl_output_path.setWordWrap(True)
         self.cmb_maxlen = QComboBox()
         for n in (32, 38, 45, 55, 70):
             self.cmb_maxlen.addItem(f'{n}자', n)
-        f3.addWidget(QLabel('출력 폴더'), 0, 0)
+        f3.addWidget(QLabel('저장 폴더'), 0, 0)
+        f3.addWidget(self.cmb_output_mode, 0, 1)
         row = QHBoxLayout()
         row.addWidget(self.edt_output, 1)
         row.addWidget(self.btn_output)
-        f3.addLayout(row, 0, 1)
-        f3.addWidget(QLabel('자막 한 줄 최대'), 1, 0)
-        f3.addWidget(self.cmb_maxlen, 1, 1)
+        f3.addLayout(row, 1, 0, 1, 2)
+        f3.addWidget(self.lbl_output_path, 2, 0, 1, 2)
+        f3.addWidget(QLabel('자막 한 줄 최대'), 3, 0)
+        f3.addWidget(self.cmb_maxlen, 3, 1)
         right_layout.addWidget(g3)
+        right_layout.addWidget(g2)
         right_layout.addStretch(1)
         body.addWidget(scroll)
 
@@ -347,6 +369,10 @@ class MainWindow(QMainWindow):
         for code, box in self.target_checks.items():
             box.setChecked(code in targets)
         self.edt_output.setText(s.value('output', ''))
+        # 예전 버전: 출력 폴더가 적혀 있으면 '직접 지정' 으로 이어받습니다.
+        default_mode = 'custom' if self.edt_output.text().strip() else 'source'
+        self._select(self.cmb_output_mode, s.value('output_mode', default_mode))
+        self._update_output_mode()
 
     def _save_settings(self):
         s = self.settings
@@ -359,6 +385,7 @@ class MainWindow(QMainWindow):
         s.setValue('translate', self.chk_translate.isChecked())
         s.setValue('targets', self.selected_targets())
         s.setValue('output', self.edt_output.text())
+        s.setValue('output_mode', self.cmb_output_mode.currentData())
 
     @staticmethod
     def _select(combo, value):
@@ -373,12 +400,96 @@ class MainWindow(QMainWindow):
     def selected_targets(self):
         return [code for code, box in self.target_checks.items() if box.isChecked()]
 
+    # ---------- 저장 위치 ----------
+    def output_mode(self):
+        return self.cmb_output_mode.currentData() or 'source'
+
+    def current_output_dir(self):
+        """현재 설정으로 정해지는 저장 폴더 문자열. '' 이면 원본 파일 옆. ('ask' 는 시작할 때 고른 폴더)"""
+        mode = self.output_mode()
+        if mode == 'ask':
+            return getattr(self, '_asked_output', '') or ''
+        return resolve_output_dir(mode, self.edt_output.text())
+
+    def _update_output_mode(self, *_):
+        mode = self.output_mode()
+        custom = mode == 'custom'
+        self.edt_output.setVisible(custom)
+        self.btn_output.setVisible(custom)
+        if mode == 'source':
+            text = '각 영상·음성 파일이 있는 폴더에 "파일이름_자막_언어.srt" 로 저장됩니다.'
+        elif mode == 'downloads':
+            text = f'저장 위치: {downloads_dir()}'
+        elif mode == 'custom':
+            folder = self.edt_output.text().strip()
+            text = f'저장 위치: {folder}' if folder else '저장할 폴더를 … 버튼으로 고르세요. 비워 두면 원본 파일 옆에 저장됩니다.'
+        else:
+            text = '"자막 만들기 시작"을 누르면 저장할 폴더를 물어봅니다.'
+        self.lbl_output_path.setText(text)
+
+    def ask_output_dir(self):
+        """'시작할 때마다 폴더 선택' 모드: 폴더 대화상자를 띄웁니다. 취소하면 None."""
+        start = self.settings.value('askdir', '') or str(downloads_dir())
+        folder = QFileDialog.getExistingDirectory(self, '자막을 저장할 폴더 선택', start)
+        if not folder:
+            return None
+        self.settings.setValue('askdir', folder)
+        self._asked_output = folder
+        return folder
+
+    def open_result_folder(self):
+        rows = sorted({i.row() for i in self.table.selectedIndexes()})
+        if not rows and self.table.rowCount():
+            rows = [self.table.rowCount() - 1]
+        folder = None
+        for row in rows:
+            files = self._result_files(row)
+            if files:
+                folder = files[0].parent
+                break
+        if folder is None:
+            out = self.current_output_dir()
+            if out and Path(out).is_dir():
+                folder = Path(out)
+            elif rows:
+                folder = Path(self.table.item(rows[0], self.COL_FILE).data(Qt.UserRole)).parent
+        if folder is None:
+            QMessageBox.information(self, APP_NAME, '열 폴더가 없습니다. 먼저 파일을 추가하세요.')
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def save_results_to(self):
+        """선택한(없으면 완료된 모든) 행의 자막 파일을 사용자가 고른 폴더에 복사합니다."""
+        rows = sorted({i.row() for i in self.table.selectedIndexes()}) or list(range(self.table.rowCount()))
+        files = []
+        for row in rows:
+            for f in self._result_files(row):
+                if f not in files:
+                    files.append(f)
+        if not files:
+            QMessageBox.information(self, APP_NAME, '저장할 자막 파일이 아직 없습니다.\n먼저 "자막 만들기 시작"으로 자막을 만드세요.')
+            return
+        start = self.settings.value('savedir', '') or str(downloads_dir())
+        folder = QFileDialog.getExistingDirectory(self, f'자막 {len(files)}개를 저장할 폴더 선택', start)
+        if not folder:
+            return
+        self.settings.setValue('savedir', folder)
+        try:
+            copied = export_files(files, folder)
+        except Exception as error:
+            QMessageBox.warning(self, APP_NAME, f'저장 실패: {error}')
+            return
+        for _src, dst in copied:
+            self.log(f'저장: {dst}')
+        self.status_label.setText(f'{len(copied)}개 파일을 {folder} 에 저장했습니다.')
+        QMessageBox.information(self, APP_NAME, f'자막 {len(copied)}개를 저장했습니다.\n{folder}')
+
     def options(self):
         return Options(
             model=self.cmb_model.currentData(), device=self.cmb_device.currentData(),
             source_language=self.cmb_source.currentData(), translate=self.chk_translate.isChecked(),
             targets=self.selected_targets(), engine=self.cmb_engine.currentData(),
-            output_dir=self.edt_output.text().strip(), allow_download=self.chk_download.isChecked(),
+            output_dir=self.current_output_dir(), allow_download=self.chk_download.isChecked(),
             max_chars=int(self.cmb_maxlen.currentData()))
 
     # ---------- 파일 목록 ----------
@@ -442,7 +553,7 @@ class MainWindow(QMainWindow):
             self.add_paths([folder])
 
     def choose_output(self):
-        folder = QFileDialog.getExistingDirectory(self, '출력 폴더 선택', self.edt_output.text() or '')
+        folder = QFileDialog.getExistingDirectory(self, '저장 폴더 선택', self.edt_output.text() or str(downloads_dir()))
         if folder:
             self.edt_output.setText(folder)
 
@@ -467,8 +578,12 @@ class MainWindow(QMainWindow):
         if not item:
             return []
         source = Path(item.data(Qt.UserRole))
-        folder = Path(self.edt_output.text().strip() or source.parent)
-        return sorted(folder.glob(f'{source.stem}_자막_*.srt'))
+        folders = [Path(self.current_output_dir() or source.parent), source.parent]
+        for folder in folders:
+            found = sorted(folder.glob(f'{source.stem}_자막_*.srt')) if folder.is_dir() else []
+            if found:
+                return found
+        return []
 
     def _open_row_folder(self, index):
         files = self._result_files(index.row())
@@ -517,6 +632,8 @@ class MainWindow(QMainWindow):
         if not jobs:
             QMessageBox.information(self, APP_NAME, '처리할 파일을 먼저 추가하세요.')
             return
+        if self.output_mode() == 'ask' and self.ask_output_dir() is None:
+            return
         options = self.options()
         if options.translate and not options.targets:
             QMessageBox.warning(self, APP_NAME, '번역 대상 언어를 하나 이상 선택하세요.')
@@ -526,6 +643,7 @@ class MainWindow(QMainWindow):
                                 '다른 모델을 선택하거나 "모델이 없으면 자동 다운로드"를 켜세요.')
             return
         self._save_settings()
+        self.log('저장 위치: ' + (options.output_dir or '원본 파일과 같은 폴더'))
         self._set_running(True)
         self.total_bar.setValue(0)
         self._job_count = len(jobs)
@@ -551,7 +669,8 @@ class MainWindow(QMainWindow):
     def _set_running(self, running):
         for w in (self.btn_start, self.btn_add, self.btn_folder, self.btn_remove, self.btn_clear,
                   self.cmb_source, self.cmb_model, self.cmb_device, self.chk_download, self.chk_translate,
-                  self.targets_box, self.cmb_engine, self.edt_output, self.btn_output, self.cmb_maxlen):
+                  self.targets_box, self.cmb_engine, self.cmb_output_mode, self.edt_output, self.btn_output,
+                  self.cmb_maxlen):
             w.setEnabled(not running)
         if not running:
             self._toggle_translate(self.chk_translate.isChecked())
@@ -584,7 +703,9 @@ class MainWindow(QMainWindow):
         names = [result.original.name] + [p.name for p in result.translated.values()]
         self.table.item(row, self.COL_RESULT).setText(f'{result.cue_count}개 큐 · ' + ', '.join(
             ['원문'] + [languages.display_name(t) for t in result.translated]))
-        self.table.item(row, self.COL_RESULT).setToolTip('\n'.join(names) + ('\n' + '\n'.join(result.errors) if result.errors else ''))
+        self.table.item(row, self.COL_RESULT).setToolTip(
+            f'저장 폴더: {result.original.parent}\n' + '\n'.join(names)
+            + ('\n' + '\n'.join(result.errors) if result.errors else ''))
         self.total_bar.setValue(int(100 * self._done_count / max(self._job_count, 1)))
 
     def _on_failed(self, row, message):

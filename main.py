@@ -26,12 +26,15 @@ if getattr(sys, 'frozen', False):
 
 def run_cli(args):
     from srtconv import languages, transcriber, translator
-    from srtconv.pipeline import Options, process_file
+    from srtconv.pipeline import Options, process_file, downloads_dir
 
+    output = args.output or ''
+    if output.lower() == 'downloads':
+        output = str(downloads_dir())
     options = Options(
         model=args.model, device=args.device, source_language=args.lang,
         translate=bool(args.translate), targets=[t.strip() for t in (args.translate or '').split(',') if t.strip()],
-        engine=args.engine, output_dir=args.output or '', allow_download=args.download, max_chars=args.max_chars)
+        engine=args.engine, output_dir=output, allow_download=args.download, max_chars=args.max_chars)
     log = lambda text: print(text, flush=True)
     model, device = transcriber.load_model(options.model, options.device, options.allow_download, log)
     print(f'모델 준비 완료 ({device})', flush=True)
@@ -98,7 +101,7 @@ def main():
     parser.add_argument('--translate', default='', help='번역 대상 언어 코드, 쉼표 구분 (예: ko,ja,zh)')
     parser.add_argument('--engine', default='auto', choices=['auto', 'offline', 'nllb', 'google', 'mymemory'],
                         help='번역 엔진 (offline: M2M100/NLLB 로컬 모델, nllb 는 offline 의 옛 이름)')
-    parser.add_argument('--output', default='', help='출력 폴더 (기본: 원본 옆)')
+    parser.add_argument('--output', default='', help='저장 폴더 (기본: 원본 옆, "downloads" 는 다운로드 폴더)')
     parser.add_argument('--download', action='store_true', help='모델이 없으면 다운로드 허용')
     parser.add_argument('--max-chars', type=int, default=45)
     parser.add_argument('--smoke', action='store_true', help=argparse.SUPPRESS)
