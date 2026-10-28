@@ -1,5 +1,5 @@
 """릴리스용 zip 3개 생성 (GitHub 릴리스 파일 2GB 제한 대응).
-사용: python build_tools/make_release.py v1.0.0   (먼저 build.cmd 로 dist/SRTCONV 를 만들어 둘 것)
+사용: python build_tools/make_release.py v1.0.0 [--base-only]   (먼저 build.cmd 로 dist/SRTCONV 를 만들어 둘 것)
   release/SRTCONV-<ver>-win64.zip          본체 (CUDA DLL·models 제외, CPU 동작)
   release/SRTCONV-<ver>-cuda-pack.zip      CUDA/cuDNN DLL (_internal 에 풀어 넣기)
   release/SRTCONV-<ver>-model-m2m100.zip   오프라인 번역 모델 (models 폴더로 풀기)
@@ -59,6 +59,8 @@ def main():
         add_tree(zf, DIST, 'SRTCONV', skip=lambda rel: (
             rel.parts[0] == 'models' or (rel.parts[0] == '_internal' and len(rel.parts) == 2 and rel.name in CUDA_DLLS)))
     print('본체:', base, f'{base.stat().st_size / 1e6:.0f} MB')
+    if '--base-only' in sys.argv:
+        return 0   # 모델·CUDA 팩은 바뀌지 않았을 때 본체만 다시 만듭니다.
 
     cuda = OUT / f'SRTCONV-{version}-cuda-pack.zip'
     with zipfile.ZipFile(cuda, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
